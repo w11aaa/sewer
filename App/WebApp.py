@@ -412,10 +412,11 @@ if user["role"] == "admin":
     _jump = App.session_state.pop("active_tab", None)
     if _jump == "工单管理":
         App.session_state["admin_active_tab"] = "🧰 工单管理"
+    # 在 radio 组件创建前同步其状态，避免实例化后再写入触发 Streamlit 异常
+    App.session_state["admin_tab_radio"] = App.session_state["admin_active_tab"]
 
     selected_tab = App.radio(
         "导航", ADMIN_TABS,
-        index=ADMIN_TABS.index(App.session_state["admin_active_tab"]),
         horizontal=True,
         label_visibility="collapsed",
         key="admin_tab_radio",

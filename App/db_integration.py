@@ -997,9 +997,8 @@ def show_admin_dispatch_center():
                     App.caption(f"管段: {o.segment.segment_code if o.segment else '未知'} | 负责人: {o.assignee or '未指派'} | 更新: {o.updated_at.strftime('%m-%d %H:%M')}")
                 with col_btn:
                     if App.button("处理", key=f"dispatch_{o.id}", use_container_width=True):
-                        App.session_state["admin_active_tab"] = "🧰 工单管理"
-                        # 同步 radio 组件的 key，确保可见选项也切换到目标 Tab
-                        App.session_state["admin_tab_radio"] = "🧰 工单管理"
+                        # 通过跳转信号让主页面在下一次运行（radio 实例化前）完成 Tab 切换
+                        App.session_state["active_tab"] = "工单管理"
                         App.session_state["workorder_selected_id"] = o.id
                         App.rerun()
     else:
