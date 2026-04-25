@@ -96,8 +96,11 @@ def get_mask_from_result(result, target_hw):
     return mask
 
 def run_smart_inference(image_input, mode="平衡模式"):
-    models = App.session_state["MODELS"]
-    if not models: return None
+    models = App.session_state.get("MODELS", {})
+    if not models:
+        models = preload_models()
+    if not models:
+        return None
     
     # 映射档位到实际逻辑
     if mode == "深度精检":
@@ -370,6 +373,12 @@ def render_worker_acceptance_page():
         with open(save_path, "wb") as out: out.write(f.read())
         
         res = run_smart_inference(save_path, mode)
+        if not isinstance(res, dict) or res.get("plot") is None:
+            App.error("AI 验收分析失败：模型未就绪或图像未识别成功，请稍后重试。")
+            return
+        data = res.get("data") or {}
+        deform_list = data.get("Deformation") or [None]
+        risk_level = res.get("risk", "未知")
         
         with App.container(border=True):
             c1, c2 = App.columns([1, 1])
@@ -378,7 +387,7 @@ def render_worker_acceptance_page():
                 # 获取健康评分
                 from HealthScore import calc_health_score
                 # 构造简易结果列表供评分
-                mock_res = [{"Deformation": res["data"]["Deformation"][0], "RiskLevel": res["risk"]}]
+                mock_res = [{"Deformation": deform_list[0], "RiskLevel": risk_level}]
                 hs = calc_health_score(mock_res, 0.3, 0.15)
                 
                 App.metric("管道健康得分", f"{hs['score']}/100")
@@ -412,10 +421,11 @@ if user["role"] == "admin":
     _jump = App.session_state.pop("active_tab", None)
     if _jump == "工单管理":
         App.session_state["admin_active_tab"] = "🧰 工单管理"
+    # 在 radio 组件创建前同步其状态，避免实例化后再写入触发 Streamlit 异常
+    App.session_state["admin_tab_radio"] = App.session_state["admin_active_tab"]
 
     selected_tab = App.radio(
         "导航", ADMIN_TABS,
-        index=ADMIN_TABS.index(App.session_state["admin_active_tab"]),
         horizontal=True,
         label_visibility="collapsed",
         key="admin_tab_radio",
