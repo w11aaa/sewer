@@ -998,6 +998,8 @@ def show_admin_dispatch_center():
                 with col_btn:
                     if App.button("处理", key=f"dispatch_{o.id}", use_container_width=True):
                         App.session_state["admin_active_tab"] = "🧰 工单管理"
+                        # 同步 radio 组件的 key，确保可见选项也切换到目标 Tab
+                        App.session_state["admin_tab_radio"] = "🧰 工单管理"
                         App.session_state["workorder_selected_id"] = o.id
                         App.rerun()
     else:
