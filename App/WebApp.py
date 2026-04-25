@@ -192,7 +192,10 @@ def _create_repair_workorder(file_name, risk, data):
         workorder_service.db_manager.close_session(session)
 
 def _result_key(item):
-    return f"{item.get('name','')}-{item.get('risk','')}-{item.get('source','')}"
+    rid = item.get("id")
+    if rid:
+        return str(rid)
+    return f"{item.get('name','')}-{item.get('source','')}"
 
 def _render_inspection_results():
     results = App.session_state.get("INSPECTION_IMAGE_RESULTS", [])
@@ -206,15 +209,18 @@ def _render_inspection_results():
     if high_candidates:
         if App.button(f"🧰 高风险一键批量报修（{len(high_candidates)}条）", key="repair_batch_high", type="primary", use_container_width=True):
             created = 0
-            for item in high_candidates:
-                res = item["res"]
-                if _create_repair_workorder(item["name"], res.get("risk", "中"), res.get("data") or {}):
-                    repaired_keys.add(_result_key(item))
-                    created += 1
-            App.session_state["REPAIRED_RESULT_KEYS"] = list(repaired_keys)
-            App.success(f"✅ 已批量生成 {created} 条报修工单")
-            App.session_state["active_tab"] = "调度中心"
-            App.rerun()
+            try:
+                for item in high_candidates:
+                    res = item["res"]
+                    if _create_repair_workorder(item["name"], res.get("risk", "中"), res.get("data") or {}):
+                        repaired_keys.add(_result_key(item))
+                        created += 1
+                App.session_state["REPAIRED_RESULT_KEYS"] = list(repaired_keys)
+                App.success(f"✅ 已批量生成 {created} 条报修工单")
+                App.session_state["active_tab"] = "调度中心"
+                App.rerun()
+            except Exception as e:
+                App.error(f"批量报修失败：{e}")
 
     for idx, item in enumerate(results):
         res = item["res"]
@@ -228,13 +234,16 @@ def _render_inspection_results():
                 if row_key in repaired_keys:
                     App.success("已生成工单")
                 elif res["risk"] in ["高", "中"]:
-                    if App.button("🛠️ 立即报修", key=f"repair_cached_{idx}_{row_key}"):
-                        if _create_repair_workorder(item["name"], res["risk"], res["data"]):
-                            repaired_keys.add(row_key)
-                            App.session_state["REPAIRED_RESULT_KEYS"] = list(repaired_keys)
-                            App.success("✅ 已自动生成维修工单！")
-                            App.session_state["active_tab"] = "调度中心"
-                            App.rerun()
+                    if App.button("🛠️ 立即报修", key=f"repair_cached_{idx}_{row_key}", use_container_width=True):
+                        try:
+                            if _create_repair_workorder(item["name"], res["risk"], res["data"]):
+                                repaired_keys.add(row_key)
+                                App.session_state["REPAIRED_RESULT_KEYS"] = list(repaired_keys)
+                                App.success("✅ 已自动生成维修工单！")
+                                App.session_state["active_tab"] = "调度中心"
+                                App.rerun()
+                        except Exception as e:
+                            App.error(f"创建工单失败：{e}")
 
 def render_inspection_page():
     App.markdown("### 🔍 巡检上传与诊断")
@@ -313,7 +322,7 @@ def render_inspection_page():
             else:
                 res = run_smart_inference(save_path, inspect_mode)
                 if isinstance(res, dict):
-                    image_results.append({"name": f.name, "res": res, "source": "upload"})
+                    image_results.append({"id": f"upload_{len(image_results)}", "name": f.name, "res": res, "source": "upload"})
 
     # ── 处理逻辑（路径批量模式）──────────────────────────────────
     if run_path:
@@ -354,7 +363,7 @@ def render_inspection_page():
                 else:
                     res = run_smart_inference(fpath, inspect_mode)
                     if isinstance(res, dict):
-                        path_image_results.append({"name": fname, "res": res, "source": "path"})
+                        path_image_results.append({"id": f"path_{i}", "name": fname, "res": res, "source": "path"})
             progress.empty()
             App.success(f"🎉 批量诊断完成！共处理 {total} 个文件")
             App.session_state.pop("_batch_scanned_paths", None)
