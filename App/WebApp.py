@@ -64,6 +64,10 @@ def init_session_state():
     # 结果缓存
     for key in ["VIDEO_RESULTS", "IMAGE_RESULTS", "IMAGE_HS", "VIDEO_HS"]:
         if key not in App.session_state: App.session_state[key] = None
+    if "INSPECTION_IMAGE_RESULTS" not in App.session_state:
+        App.session_state["INSPECTION_IMAGE_RESULTS"] = []
+    if "REPAIRED_RESULT_KEYS" not in App.session_state:
+        App.session_state["REPAIRED_RESULT_KEYS"] = []
 
 # ── 模型加载 ──────────────────────────────────────────────────────
 def preload_models():
@@ -157,8 +161,84 @@ def _collect_files_from_path(folder_path: str):
                     collected.append(OS.path.join(root, fn))
     return collected
 
+def _result_action_suggestion(data):
+    suggestion = (data or {}).get("ActionSuggestion")
+    if isinstance(suggestion, list):
+        return suggestion[0] if suggestion else "请尽快安排人工复核。"
+    if isinstance(suggestion, str):
+        return suggestion
+    return "请尽快安排人工复核。"
+
+def _create_repair_workorder(file_name, risk, data):
+    from database import PipelineSegment
+    session = workorder_service.db_manager.get_session()
+    try:
+        seg = session.query(PipelineSegment).first()  # 默认取首个管段（演示）
+        workorder_service.create_work_order(
+            title=f"巡检报修: {file_name}",
+            description=f"AI 自动检出风险：{risk}。诊断结论：{_result_action_suggestion(data)}",
+            risk_level=risk,
+            segment_id=seg.id if seg else None,
+        )
+        audit_service.log_action(
+            App.session_state["user_info"]["id"],
+            App.session_state["user_info"]["username"],
+            "报修",
+            "巡检",
+            f"为 {file_name} 创建了报修单",
+        )
+        return True
+    finally:
+        workorder_service.db_manager.close_session(session)
+
+def _result_key(item):
+    return f"{item.get('name','')}-{item.get('risk','')}-{item.get('source','')}"
+
+def _render_inspection_results():
+    results = App.session_state.get("INSPECTION_IMAGE_RESULTS", [])
+    if not results:
+        return
+
+    App.markdown("#### 🧾 本次巡检结果")
+    repaired_keys = set(App.session_state.get("REPAIRED_RESULT_KEYS", []))
+
+    high_candidates = [it for it in results if it["res"].get("risk") in ["高", "中"] and _result_key(it) not in repaired_keys]
+    if high_candidates:
+        if App.button(f"🧰 高风险一键批量报修（{len(high_candidates)}条）", key="repair_batch_high", type="primary", use_container_width=True):
+            created = 0
+            for item in high_candidates:
+                res = item["res"]
+                if _create_repair_workorder(item["name"], res.get("risk", "中"), res.get("data") or {}):
+                    repaired_keys.add(_result_key(item))
+                    created += 1
+            App.session_state["REPAIRED_RESULT_KEYS"] = list(repaired_keys)
+            App.success(f"✅ 已批量生成 {created} 条报修工单")
+            App.session_state["active_tab"] = "调度中心"
+            App.rerun()
+
+    for idx, item in enumerate(results):
+        res = item["res"]
+        with App.container(border=True):
+            c1, c2, c3 = App.columns([2, 2, 2])
+            c1.image(res["plot"], caption=f"诊断结果: {item['name']}")
+            c2.dataframe(res["data"], hide_index=True)
+            with c3:
+                App.markdown(f"**风险等级: {res['risk']}**")
+                row_key = _result_key(item)
+                if row_key in repaired_keys:
+                    App.success("已生成工单")
+                elif res["risk"] in ["高", "中"]:
+                    if App.button("🛠️ 立即报修", key=f"repair_cached_{idx}_{row_key}"):
+                        if _create_repair_workorder(item["name"], res["risk"], res["data"]):
+                            repaired_keys.add(row_key)
+                            App.session_state["REPAIRED_RESULT_KEYS"] = list(repaired_keys)
+                            App.success("✅ 已自动生成维修工单！")
+                            App.session_state["active_tab"] = "调度中心"
+                            App.rerun()
+
 def render_inspection_page():
     App.markdown("### 🔍 巡检上传与诊断")
+    image_results = []
 
     upload_tab, path_tab = App.tabs(["📤 文件上传", "📁 路径批量导入"])
 
@@ -232,29 +312,8 @@ def render_inspection_page():
                 db_integration.save_video_analysis(save_path, [{"Plot": r["plot"], "Mask": r["mask"], "Shape": r["data"]["Shape"][0], "RiskLevel": r["risk"]} for r in v_res], {"mode": inspect_mode})
             else:
                 res = run_smart_inference(save_path, inspect_mode)
-                image_results.append({"name": f.name, "res": res})
-                # 显示结果
-                with App.container(border=True):
-                    c1, c2, c3 = App.columns([2, 2, 2])
-                    c1.image(res["plot"], caption=f"诊断结果: {f.name}")
-                    c2.dataframe(res["data"], hide_index=True)
-                    with c3:
-                        App.markdown(f"**风险等级: {res['risk']}**")
-                        if res["risk"] in ["高", "中"]:
-                            if App.button("🛠️ 立即报修", key=f"repair_{f.name}"):
-                                # 自动生成工单
-                                from database import PipelineSegment
-                                session = workorder_service.db_manager.get_session()
-                                seg = session.query(PipelineSegment).first() # 演示用，取第一个
-                                workorder_service.create_work_order(
-                                    title=f"巡检报修: {f.name}",
-                                    description=f"AI 自动检出风险：{res['risk']}。诊断结论：{res['data'].get('ActionSuggestion')[0]}",
-                                    risk_level=res["risk"],
-                                    segment_id=seg.id if seg else None
-                                )
-                                audit_service.log_action(App.session_state["user_info"]["id"], App.session_state["user_info"]["username"], "报修", "巡检", f"为 {f.name} 创建了报修单")
-                                App.success("✅ 已自动生成维修工单！")
-                                workorder_service.db_manager.close_session(session)
+                if isinstance(res, dict):
+                    image_results.append({"name": f.name, "res": res, "source": "upload"})
 
     # ── 处理逻辑（路径批量模式）──────────────────────────────────
     if run_path:
@@ -273,6 +332,7 @@ def render_inspection_page():
             App.info(f"开始批量诊断，共 {len(batch_paths)} 个文件...")
             progress = App.progress(0, text="准备中...")
             total = len(batch_paths)
+            path_image_results = []
             for i, fpath in enumerate(batch_paths):
                 fname = OS.path.basename(fpath)
                 progress.progress((i + 1) / total, text=f"正在处理 ({i+1}/{total}): {fname}")
@@ -293,29 +353,18 @@ def render_inspection_page():
                     App.success(f"✅ 视频 {fname} 处理完成，检出 {len(v_res)} 个关键点")
                 else:
                     res = run_smart_inference(fpath, inspect_mode)
-                    with App.container(border=True):
-                        c1, c2, c3 = App.columns([2, 2, 2])
-                        c1.image(res["plot"], caption=f"{fname}")
-                        c2.dataframe(res["data"], hide_index=True)
-                        with c3:
-                            App.markdown(f"**风险等级: {res['risk']}**")
-                            if res["risk"] in ["高", "中"]:
-                                if App.button("🛠️ 立即报修", key=f"repair_path_{i}_{fname}"):
-                                    from database import PipelineSegment
-                                    session = workorder_service.db_manager.get_session()
-                                    seg = session.query(PipelineSegment).first()
-                                    workorder_service.create_work_order(
-                                        title=f"巡检报修: {fname}",
-                                        description=f"AI 自动检出风险：{res['risk']}。诊断结论：{res['data'].get('ActionSuggestion')[0]}",
-                                        risk_level=res["risk"],
-                                        segment_id=seg.id if seg else None
-                                    )
-                                    audit_service.log_action(App.session_state["user_info"]["id"], App.session_state["user_info"]["username"], "报修", "巡检", f"为 {fname} 创建了报修单")
-                                    App.success("✅ 已自动生成维修工单！")
-                                    workorder_service.db_manager.close_session(session)
+                    if isinstance(res, dict):
+                        path_image_results.append({"name": fname, "res": res, "source": "path"})
             progress.empty()
             App.success(f"🎉 批量诊断完成！共处理 {total} 个文件")
             App.session_state.pop("_batch_scanned_paths", None)
+            App.session_state["INSPECTION_IMAGE_RESULTS"] = path_image_results
+            App.session_state["REPAIRED_RESULT_KEYS"] = []
+
+    if image_results:
+        App.session_state["INSPECTION_IMAGE_RESULTS"] = image_results
+        App.session_state["REPAIRED_RESULT_KEYS"] = []
+    _render_inspection_results()
 
 def login_page():
     App.markdown("<div style='text-align:center;margin-top:100px;'><h1>🏙️ 城市下水道智能运维平台</h1><p>请登录以访问您的工作台</p></div>", unsafe_allow_html=True)
@@ -423,6 +472,8 @@ if user["role"] == "admin":
     _jump = App.session_state.pop("active_tab", None)
     if _jump == "工单管理":
         App.session_state["admin_tab_radio"] = "🧰 工单管理"
+    elif _jump == "调度中心":
+        App.session_state["admin_tab_radio"] = "🛰️ 调度中心"
 
     selected_tab = App.radio(
         "导航", ADMIN_TABS,
