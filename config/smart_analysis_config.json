@@ -1,0 +1,28 @@
+{
+  "defect_thresholds": {
+    "crack": 0.15,
+    "corrosion": 0.2,
+    "deposit": 0.25,
+    "deformation": 0.3
+  },
+  "health_score_weights": {
+    "crack": 25,
+    "corrosion": 20,
+    "deposit": 15,
+    "deformation": 30
+  },
+  "analysis_features": {
+    "enable_crack_detection": true,
+    "enable_corrosion_detection": true,
+    "enable_deposit_detection": true,
+    "enable_deformation_detection": true,
+    "enable_health_scoring": true,
+    "enable_recommendations": true
+  },
+  "visualization_options": {
+    "show_health_overlay": true,
+    "show_defect_heatmap": true,
+    "show_analysis_charts": true,
+    "color_scheme": "default"
+  }
+}

@@ -1,0 +1,8 @@
+names:
+- sewer_pipe
+nc: 1
+path: ./Dataset
+test: Images/Test
+train: Images/Train
+val: Images/Valid
+
